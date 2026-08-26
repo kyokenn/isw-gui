@@ -1,95 +1,58 @@
-ISW Stealth
-===========
+ISW GUI
+=======
 
-[![Logo](https://github.com/kyokenn/isw-stealth/blob/master/image/isw.svg)](https://github.com/kyokenn/isw-stealth/blob/master/image/isw.svg)
+[![Logo](https://github.com/kyokenn/isw-gui/blob/master/image/isw.svg)](https://github.com/kyokenn/isw-gui/blob/master/image/isw.svg)
 
 Ice-Sealed Wyvern. It is meant to alter fan profiles of MSI laptops.
 
-A fork of [ISW](https://github.com/YoyPa/isw) and [ISW-Modern](https://github.com/FaridZelli/ISW-Modern)
+A fork of [ISW](https://github.com/YoyPa/isw) and [ISW-Modern](https://github.com/FaridZelli/ISW-Modern) with GUI inspired by [MControlCenter](https://github.com/dmitry-s93/MControlCenter).
+
+No building required. Depends only on [msi-ec](https://github.com/BeardOverflow/msi-ec) kernel module.
+Doesn't uses acpi-ec and ec-sys kernel modules.
+
+[![Screenshot](https://github.com/kyokenn/isw-gui/blob/master/image/screenshot.png)](https://github.com/kyokenn/isw-gui/blob/master/image/screenshot.png)
+
+
+Requirements
+------------
+
+* GTK4
+* Python 3.12+
+* Python GObject Introspection (python3-gobject or python3-gi)
+* [msi-ec](https://github.com/BeardOverflow/msi-ec)
 
 
 Installation
 ------------
 
-Clone the git repository (including **acpi_ec** submodule):
-```
-git clone --recurse-submodules https://github.com/kyokenn/isw-stealth.git
-cd isw-stealth
-```
+* Install [msi-ec](https://github.com/BeardOverflow/msi-ec) kernel module.
 
-Install **acpi_ec** kernel module. This module provides file /dev/ec for reading and writing
-laptop hardware configuration.
-
-**RPM based distros with AKMOD:**
-
-* Build RPM files:
+* Enable msi-ec debug mode (some features will not be available without it):
 ```
-cd acpi_ec_akmod
-make rpm
+cp -Rfv ./etc/modprobe.d /etc/
+cp -Rfv ./etc/modules-load.d /etc/
 ```
 
-* Install RPM files using package manager.
-
-**DEB based distros with AKMOD:**
-
-* Build DEB files:
+* Clone this git repository:
 ```
-cd acpi_ec_akmod
-make deb
+git clone https://github.com/kyokenn/isw-gui.git
+cd isw-gui
 ```
-
-* Install DEB files using package manager.
-
-
-**Other distros with DKMS:**
-
-Follow the instructions on [acpi_ec](https://github.com/saidsay-so/acpi_ec)
 
 
 Usage
 -----
 
+* Run the app from repository:
 ```
-sudo ./isw -f path_to_config_file.conf <options>
+sudo -E ./isw-gui
 ```
-
-List of supported laptops
--------------------------
-
-You can search the configuration files for the supported laptops [here](https://github.com/kyokenn/isw-stealth/blob/master/etc)
-
-You can dump your ACPI EC data on Linux using:
-```
-sudo hexdump -C /dev/ec
-```
-
-You can debug your ACPI EC data on Windows with MSI Control Center and [ec_probe](https://github.com/hirschmann/nbfc)
-
-
-FAQ
----
-
-* **Q:** Why ISW-Stealth?  
-**A:** I originally used ISW on my MSI Stealth 14, hence the name.
-
-* **Q:** Can I enable Secure Boot?  
-**A:** No. You have to use unsigned out of tree kernel module **acpi_ec**.
-
-* **Q:** Is this a revival of ISW?  
-**A:** No. But anyone can use it freely if find it useful.
-
-* **Q:** Is the original project dead?  
-**A:** Yes. Both ISW and ISW-Modern are not maintained at this moment.
-
-* **Q:** My laptop exploded!  
-**A:** **WARNING!** **You could break your laptop by directly writing to the ACPI EC!**
 
 
 Useful resources
 ----------------
 
+* https://github.com/BeardOverflow/msi-ec
+* https://github.com/dmitry-s93/MControlCenter
 * https://github.com/YoyPa/isw
 * https://github.com/FaridZelli/ISW-Modern
-* https://github.com/musikid/acpi_ec
-* https://github.com/hirschmann/nbfc
-* https://github.com/nbfc-linux/nbfc-linux

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Script to split original isw.conf into separate files
+
 
 with open('isw.conf', 'r') as fin:
     fout = None

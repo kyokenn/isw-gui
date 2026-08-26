@@ -1,0 +1,459 @@
+#!/usr/bin/env python3
+from configparser import ConfigParser
+
+import gi
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk, GLib
+import os
+
+
+class ISW(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id='isw.gui')
+        self.window = None
+
+    def do_activate(self):
+        if not self.window:
+            self.window = MainWindow(application=self)
+        self.window.present()
+
+
+class MainWindow(Gtk.ApplicationWindow):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.set_title('ISW')
+        self.set_default_size(400, 150)
+        self.set_resizable(False)
+
+        self.queue = {}
+        self.config = {}
+        self.controls = {}
+        self.has_defaults = False
+        value = self.read_file_content('/sys/devices/platform/msi-ec/fw_version')
+        if value:
+            fw, _, version = value.partition('.')
+            etc = os.path.abspath(os.path.join(os.path.dirname(__file__), 'etc'))
+            self.config = self.find_config_section(fw, etc)
+
+        header = Gtk.HeaderBar()
+        header.set_show_title_buttons(True)
+        self.set_titlebar(header)
+
+        content = self.make_content(header)
+        self.set_child(content)
+
+        self.update_timer = GLib.timeout_add_seconds(1, self.update_system_info)
+
+    def find_config_section(self, fw, path):
+        print(f'searching config for {fw} in {path}')
+        for name in os.listdir(path):
+            if name.endswith('.conf'):
+                config = ConfigParser()
+                config.read(os.path.join(path, name))
+                if fw in config.sections():
+                    section = {}
+                    if address_profile := config[fw].get('address_profile'):
+                        if address_profile != fw:
+                            profile = self.find_config_section(address_profile, path)
+                            section.update(dict(profile))
+
+                    section.update(config[fw])
+
+                    print(f'found config {name} in {path}')
+                    return section
+
+        return {}
+
+    def get_address(self, key):
+        address = self.config.get(key)
+        if not address:
+            return None
+
+        if address.startswith('0x'):
+            return int(address, 16)
+        else:
+            return int(address)
+
+    def read_file_content(self, path) -> str | None:
+        try:
+            with open(path, 'r') as f:
+                return f.read().strip()
+        except:
+            return None
+
+    def write_file_content(self, path, content) -> bool:
+        try:
+            with open(path, 'w') as f:
+                f.write(content)
+            return True
+        except:
+            return False
+
+    def read_raw_value(self, address: int) -> int:
+        path = '/sys/devices/platform/msi-ec/debug/ec_get'
+        self.write_file_content(path, '{:02x}'.format(address))
+        if value := self.read_file_content(path):
+            return int(value, 16)
+
+    def ec_check_bit(self, address: int, bit: int) -> bool:
+        return bool(self.read_raw_value(address) & (1 << bit))
+
+    def write_raw_value(self, address: int, value: int) -> None:
+        path = '/sys/devices/platform/msi-ec/debug/ec_set'
+        self.write_file_content(path, '{:02x}={:02x}'.format(address, value))
+
+    def update_system_info(self):
+        for key, widgets in self.controls.items():
+            if type(widgets) is not tuple:
+                widgets = (widgets,)
+
+            for widget in widgets:
+                if not key.startswith('/sys'):
+                    continue
+
+                value = self.read_file_content(key)
+
+                if isinstance(widget, Gtk.Label):
+                    suffix = ''
+                    if key.endswith('_temperature'):
+                        suffix = '°C'
+                    elif key.endswith('_speed'):
+                        suffix = '%'
+                    widget.set_label(f'{value}{suffix}')
+
+        return True
+
+    def on_reset(self, button):
+        for key, widgets in self.controls.items():
+            if type(widgets) is not tuple:
+                widgets = (widgets,)
+
+            for widget in widgets:
+                if key.startswith('/sys'):
+                    continue
+
+                value = self.config.get(key)
+                if not value:
+                    continue
+
+                if isinstance(widget, Gtk.Label):
+                    suffix = ''
+                    if '_temp_' in key:
+                        suffix = '°C'
+                    elif '_speed_' in key:
+                        suffix = '%'
+                    widget.set_label(f'{value}{suffix}')
+                else:
+                    widget.set_value(int(value))
+
+    def on_apply(self, button):
+        for address, value in self.queue.items():
+            self.write_raw_value(address, value)
+
+        self.queue = {}
+        self.apply_btn.set_sensitive(False)
+
+    def on_checkbox_value_toggled(self, check, path, choices):
+        for active, choice in zip((False, True), choices[:2]):
+            if check.get_active() == active:
+                self.write_file_content(path, choice)
+                return
+
+    def on_checkbox_bit_toggled(self, check, address, bit):
+        value = self.read_raw_value(address)
+        if check.get_active():
+            value |= 1 << bit
+        else:
+            value &= ~(1 << bit)
+        self.write_raw_value(address, value)
+
+    def on_combo_changed(self, combo, path):
+        if os.path.basename(path) == 'fan_mode':
+            self.update_fan_control_sensitivity(combo.get_active_text())
+
+        self.write_file_content(path, combo.get_active_text())
+
+    def on_select(self, button, path, value):
+        if os.path.basename(path) == 'fan_mode':
+            self.update_fan_control_sensitivity(value)
+
+        self.write_file_content(path, value)
+
+    def on_slider_changed(self, slider, label, address):
+        value = int(slider.get_value())
+        label.set_label(f'{value}%')
+        self.queue[address] = value
+        self.apply_btn.set_sensitive(True)
+
+    def on_spin_changed(self, spin, address):
+        value = int(spin.get_value())
+        self.queue[address] = value
+        self.apply_btn.set_sensitive(True)
+
+    def on_spin_output(self, spin):
+        value = spin.get_value()
+        text = f'{int(value)} °C'
+        spin.set_text(text)
+        return True
+
+    def on_spin_input(self, spin, value):
+        try:
+            text = spin.get_text()
+            value = float(text.replace('°C', '').strip())
+            spin.set_value(value)
+            return True
+        except ValueError as e:
+            return False
+
+    def make_select(self, path, choices_path):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        box.add_css_class('linked')
+
+        first_btn = None
+        choices = self.read_file_content(choices_path)
+        value = self.read_file_content(path)
+        if choices:
+            for choice in choices.split():
+                btn = Gtk.ToggleButton(label=choice.title())
+                if first_btn is None:
+                    first_btn = btn
+                else:
+                    btn.set_group(first_btn)
+                btn.set_active(choice == value)
+                box.append(btn)
+                btn.connect('toggled', self.on_select, path, choice)
+
+        return box
+
+    def make_checkboxes(self):
+        checkboxes = []
+
+        rows = (
+            ('USB Power Share', 0xbf, 5),
+        )
+
+        for label, address, bit in rows:
+            value = self.ec_check_bit(address, bit)
+            checkbox = Gtk.CheckButton(label=label)
+            checkbox.set_active(value)
+            checkbox.connect('toggled', self.on_checkbox_bit_toggled, address, bit)
+            checkboxes.append(checkbox)
+
+        rows = (
+            ('WebCam', 'webcam', ('off', 'on')),
+            ('WebCam Block', 'webcam_block', ('off', 'on')),
+            ('FN ⇄  Super', 'fn_key', ('left', 'right')),
+            ('Cooler Boost', 'cooler_boost', ('off', 'on')),
+            ('Super Battery', 'super_battery', ('off', 'on')),
+            ('Mute LED', 'leds/platform::mute/brightness', ('0', '1')),
+            ('Mic Mute LED', 'leds/platform::micmute/brightness', ('0', '1')),
+            ('Stealth LED', 'leds/platform::stealth/brightness', ('0', '1')),
+        )
+
+        for label, name, choices in rows:
+            path = f'/sys/devices/platform/msi-ec/{name}'
+            if not os.path.exists(path):
+                continue
+
+            value = self.read_file_content(path)
+            checkbox = Gtk.CheckButton(label=label)
+            for active, choice in zip((False, True), choices[:2]):
+                if choice == value:
+                    checkbox.set_active(active)
+            checkbox.connect('toggled', self.on_checkbox_value_toggled, path, choices)
+            checkboxes.append(checkbox)
+
+        grid = Gtk.Grid()
+        grid.set_column_homogeneous(True)
+        grid.set_row_spacing(5)
+        for i, checkbox in enumerate(checkboxes):
+            x = i % 2
+            y = i // 2
+            grid.attach(checkbox, x, y, 1, 1)
+
+        return grid
+
+    def make_fan_info(self, unit):
+        grid = Gtk.Grid()
+        grid.set_column_homogeneous(True)
+
+        rows = (
+            (f'{unit.upper()} temp:', 'realtime_temperature'),
+            (f'{unit.upper()} fan:', 'realtime_fan_speed'),
+        )
+
+        for i, (label, name) in enumerate(rows):
+            path = f'/sys/devices/platform/msi-ec/{unit}/{name}'
+            if not os.path.exists(path):
+                continue
+
+            cell = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            grid.attach(cell, i, 0, 1, 1)
+
+            label = Gtk.Label(label=label)
+            label.set_halign(Gtk.Align.END)
+            cell.append(label)
+
+            value = Gtk.Label(label='-')
+            value.set_halign(Gtk.Align.START)
+            cell.append(value)
+
+            self.controls[path] = value
+
+        return grid
+
+    def make_column(self, unit, index):
+        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+
+        label = Gtk.Label(label='-')
+        column.append(label)
+
+        slider = Gtk.Scale(orientation=Gtk.Orientation.VERTICAL)
+        slider.set_range(0, 150)
+        slider.set_draw_value(False)
+        slider.set_hexpand(False)
+        slider.set_size_request(-1, 150)
+        slider.set_inverted(True)
+        column.append(slider)
+
+        fan_speed_address = self.get_address(f'{unit}_fan_speed_address_{index}')
+        fan_speed = self.read_raw_value(fan_speed_address)
+        label.set_label(f'{fan_speed}%')
+        slider.set_value(fan_speed)
+        slider.connect('value-changed', self.on_slider_changed, label, fan_speed_address)
+        key = f'{unit}_fan_speed_{index}'
+        if self.config.get(key):
+            self.controls[key] = (label, slider)
+            self.has_defaults = True
+
+        if temp_address := self.get_address(f'{unit}_temp_address_{index}'):
+            adjustment = Gtk.Adjustment(value=0, lower=0, upper=100, step_increment=1)
+            spin = Gtk.SpinButton(adjustment=adjustment, climb_rate=1, digits=0)
+            spin.set_orientation(Gtk.Orientation.VERTICAL)
+            spin.set_numeric(False)
+            spin.set_width_chars(5)
+            column.append(spin)
+
+            temp = self.read_raw_value(temp_address)
+            # spin.connect('input', self.on_spin_input)
+            spin.connect('output', self.on_spin_output)
+            spin.set_value(temp)
+            spin.connect('value-changed', self.on_spin_changed, temp_address)
+            key = f'{unit}_temp_{index}'
+            if self.config.get(key):
+                self.controls[key] = spin
+                self.has_defaults = True
+
+        return column
+
+    def make_fan_controls(self, unit):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        box.set_halign(Gtk.Align.CENTER)
+
+        i = 0
+        while self.config and self.config.get(f'{unit}_fan_speed_address_{i}'):
+            box.append(self.make_column(unit, i))
+            i += 1
+
+        return box
+
+    def make_content(self, header):
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        content.set_margin_top(10)
+        content.set_margin_bottom(10)
+        content.set_margin_start(10)
+        content.set_margin_end(10)
+
+        if os.path.exists('/sys/devices/platform/msi-ec/shift_mode'):
+            shift_mode_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            shift_mode_box.set_halign(Gtk.Align.CENTER)
+            header.set_title_widget(shift_mode_box)
+            shift_mode_select = self.make_select(
+                path='/sys/devices/platform/msi-ec/shift_mode',
+                choices_path='/sys/devices/platform/msi-ec/available_shift_modes')
+            shift_mode_box.append(shift_mode_select)
+
+        checkbox_grid = self.make_checkboxes()
+        content.append(checkbox_grid)
+
+        separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        content.append(separator)
+
+        self.apply_btn = None
+        self.reset_btn = None
+        if os.path.exists('/sys/devices/platform/msi-ec/fan_mode'):
+            fan_mode_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            fan_mode_box.set_halign(Gtk.Align.CENTER)
+            content.append(fan_mode_box)
+            fan_mode_select = self.make_select(
+                path='/sys/devices/platform/msi-ec/fan_mode',
+                choices_path='/sys/devices/platform/msi-ec/available_fan_modes')
+            fan_mode_box.append(fan_mode_select)
+
+        fan_info_grid = Gtk.Grid()
+        fan_info_grid.set_column_spacing(20)
+        fan_info_grid.set_column_homogeneous(True)
+        content.append(fan_info_grid)
+        for x, unit in enumerate(('cpu', 'gpu')):
+            fan_info_grid.attach(self.make_fan_info(unit), x, 0, 1, 1)
+
+        if os.path.exists('/sys/devices/platform/msi-ec/debug') and self.config:
+            fan_controls_grid = Gtk.Grid()
+            fan_controls_grid.set_column_spacing(20)
+            fan_controls_grid.set_column_homogeneous(True)
+            content.append(fan_controls_grid)
+            for x, unit in enumerate(('cpu', 'gpu')):
+                fan_controls_grid.attach(self.make_fan_controls(unit), x, 0, 1, 1)
+
+            btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            btn_box.set_halign(Gtk.Align.CENTER)
+            content.append(btn_box)
+
+            self.apply_btn = Gtk.Button(label='Apply')
+            self.apply_btn.set_sensitive(False)
+            self.apply_btn.connect('clicked', self.on_apply)
+            btn_box.append(self.apply_btn)
+
+            if self.has_defaults:
+                self.reset_btn = Gtk.Button(label='Reset')
+                self.reset_btn.set_sensitive(False)
+                self.reset_btn.connect('clicked', self.on_reset)
+                btn_box.append(self.reset_btn)
+
+            fan_mode = self.read_file_content('/sys/devices/platform/msi-ec/fan_mode')
+            self.update_fan_control_sensitivity(fan_mode)
+
+        return content
+
+    def update_fan_control_sensitivity(self, fan_mode):
+        is_advanced = (fan_mode == 'advanced')
+
+        for key, widgets in self.controls.items():
+            if type(widgets) is not tuple:
+                widgets = (widgets,)
+
+            for widget in widgets:
+                if key.startswith('/sys'):
+                    continue
+
+                if isinstance(widget, (Gtk.SpinButton, Gtk.Scale)):
+                    widget.set_sensitive(is_advanced)
+
+        if self.reset_btn:
+            self.reset_btn.set_sensitive(is_advanced)
+
+        if self.apply_btn:
+            if is_advanced:
+                self.apply_btn.set_sensitive(bool(self.queue))
+            else:
+                self.apply_btn.set_sensitive(False)
+
+
+def main():
+    Gtk.init_check()
+    app = ISW()
+    app.run(None)
+
+
+if __name__ == "__main__":
+    main()
