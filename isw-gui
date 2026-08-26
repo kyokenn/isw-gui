@@ -229,17 +229,6 @@ class MainWindow(Gtk.ApplicationWindow):
         checkboxes = []
 
         rows = (
-            ('USB Power Share', 0xbf, 5),
-        )
-
-        for label, address, bit in rows:
-            value = self.ec_check_bit(address, bit)
-            checkbox = Gtk.CheckButton(label=label)
-            checkbox.set_active(value)
-            checkbox.connect('toggled', self.on_checkbox_bit_toggled, address, bit)
-            checkboxes.append(checkbox)
-
-        rows = (
             ('WebCam', 'webcam', ('off', 'on')),
             ('WebCam Block', 'webcam_block', ('off', 'on')),
             ('FN ⇄  Super', 'fn_key', ('left', 'right')),
@@ -261,6 +250,19 @@ class MainWindow(Gtk.ApplicationWindow):
                 if choice == value:
                     checkbox.set_active(active)
             checkbox.connect('toggled', self.on_checkbox_value_toggled, path, choices)
+            checkboxes.append(checkbox)
+
+        rows = tuple()
+        if os.path.exists('/sys/devices/platform/msi-ec/debug') and self.config:
+            rows = (
+                ('USB Power Share', 0xbf, 5),
+            )
+
+        for label, address, bit in rows:
+            value = self.ec_check_bit(address, bit)
+            checkbox = Gtk.CheckButton(label=label)
+            checkbox.set_active(value)
+            checkbox.connect('toggled', self.on_checkbox_bit_toggled, address, bit)
             checkboxes.append(checkbox)
 
         grid = Gtk.Grid()
@@ -363,6 +365,13 @@ class MainWindow(Gtk.ApplicationWindow):
         content.set_margin_bottom(10)
         content.set_margin_start(10)
         content.set_margin_end(10)
+
+        if not os.path.exists('/sys/devices/platform/msi-ec'):
+            warning_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            warning_box.set_halign(Gtk.Align.CENTER)
+            content.append(warning_box)
+            label = Gtk.Label(label='msi-ec kernel module is not loaded.')
+            warning_box.append(label)
 
         if os.path.exists('/sys/devices/platform/msi-ec/shift_mode'):
             shift_mode_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
